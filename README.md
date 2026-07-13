@@ -42,7 +42,7 @@ A small floating card list, one per active session, color-coded by status,
 plus a toast notification that slides in bottom-right when a session needs
 you or finishes.
 
-*(Demo GIF goes here.)*
+![Demo: floating widget tracking multiple Claude Code sessions, with statuses moving from Working to Done](demo.gif)
 
 ## Requirements
 

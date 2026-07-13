@@ -25,7 +25,7 @@ existing tools in this space don't distinguish them.
 
 1. Clone this repo into your Claude Code skills folder:
    ```
-   git clone https://github.com/<your-username>/claude-code-lookout.git ~/.claude/skills/claude-code-lookout
+   git clone https://github.com/whizopsllc-eng/claude-code-lookout.git ~/.claude/skills/claude-code-lookout
    ```
    (On Windows: `%USERPROFILE%\.claude\skills\claude-code-lookout`)
 2. In a Claude Code session, just ask: *"build me a session tracker like

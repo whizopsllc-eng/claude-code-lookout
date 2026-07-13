@@ -1028,6 +1028,20 @@ note under "Key facts" below for why.
 
 ## Step 5 — Test it
 
+**If you (the AI agent) are launching the app yourself** via your own Bash/
+terminal tool to test it, unset `ELECTRON_RUN_AS_NODE` first — confirmed on
+both Windows and macOS to otherwise crash immediately with
+`TypeError: Cannot read properties of undefined (reading 'requestSingleInstanceLock')`.
+Claude Code's own tool-execution shell sets this variable, which makes
+`electron.exe`/`electron` run as plain Node instead of the full Electron
+runtime, so `require('electron')` returns a path string instead of the API
+object. This is about *the agent's* shell, not the OS, so it recurs
+regardless of platform — but it does **not** affect a human launching the
+app normally (double-clicking it, or their own separate terminal window),
+since a normal user shell doesn't have this set. Fix: run with the variable
+cleared, e.g. `env -u ELECTRON_RUN_AS_NODE npm start` on macOS/Linux, or
+clear it in the current shell before running on Windows.
+
 1. Launch the app: `npm start` (or the `.vbs` launcher).
 2. Confirm the HTTP server is up:
    `curl -X POST http://127.0.0.1:51823/hook -d "{}"` should return `ok`.

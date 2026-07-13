@@ -47,9 +47,13 @@ you or finishes.
 ## Requirements
 
 - Node.js + npm
-- Windows is what this was built and tested on (Electron + a `.vbs` silent
-  launcher). The app itself is cross-platform; only the launcher needs
-  adapting for macOS/Linux — see `SKILL.md` for notes.
+- Windows: built and extensively tested here, including a from-scratch dry
+  run following only this skill.
+- macOS: confirmed working by a user following this skill directly. The
+  silent-launcher step (`start-widget.vbs`) is Windows-only and needs a
+  macOS equivalent (a `.command` file or LaunchAgent) — see `SKILL.md`.
+- Linux: architecturally should work (same cross-platform Electron code) but
+  not yet confirmed by anyone — if you try it, let us know.
 
 ## Why this exists
 

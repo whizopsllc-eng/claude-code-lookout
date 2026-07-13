@@ -1022,7 +1022,9 @@ doing it**, the same way you would before any other edit to shared config.
 ```
 
 If the port in `main.js` (`PORT = 51823`) gets changed, update every URL
-above to match.
+above to match. If this is a second install alongside an existing one on the
+same machine, also change `package.json`'s `"name"` field — see the userData
+note under "Key facts" below for why.
 
 ## Step 5 — Test it
 
@@ -1069,6 +1071,16 @@ above to match.
   matcher, or `"*"`) fire on *every single tool call* across every session —
   avoid that; scope matchers tightly (as above) or skip hooking events you
   don't need for state tracking.
+- **Electron's data folder is keyed off `package.json`'s `"name"` field, not
+  the install location.** `app.getPath('userData')` derives its path from
+  that name, not from where the files happen to live on disk. If this recipe
+  is ever run twice on the same machine (or `AppData` syncs across machines)
+  with `package.json` left at its default name, the two installs will
+  silently share -- and overwrite -- the same `sessions.json`/`bounds.json`,
+  or the second one's `requestSingleInstanceLock()` will just quietly quit it
+  on launch with no visible error. If you're doing a second/test install
+  alongside an existing one, change `package.json`'s `"name"` field as well
+  as the port -- not just the port.
 
 ## Customization
 

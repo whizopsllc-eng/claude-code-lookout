@@ -286,7 +286,9 @@ function getOrCreate(id, cwd) {
       lastPromptAt: Date.now(),
       doneAt: null,
       notifiedDone: false,
-      notifiedNeedsAction: false
+      notifiedNeedsAction: false,
+      pendingBackground: [],
+      lastAssistantMessage: null
     };
     sessions.set(id, rec);
   }
@@ -311,6 +313,14 @@ function handleHookEvent(payload) {
   if (payload.session_title) rec.title = payload.session_title;
   if (payload.transcript_path) rec.transcriptPath = payload.transcript_path;
   rec.lastEventAt = Date.now();
+
+  // Stop/SubagentStop payloads carry a live snapshot of every background_task
+  // (subagents, background shells, workflows) still running for this session
+  // -- excluding the one whose own stop this event *is*, since it can still
+  // list itself as "running" at the instant it reports its own completion.
+  if (Array.isArray(payload.background_tasks)) {
+    rec.pendingBackground = payload.background_tasks.filter((t) => t.id !== payload.agent_id);
+  }
 
   // Apply all state changes first; any toast fires after, once, using the
   // freshly-resolved label -- avoids scanning the transcript more than once
@@ -360,11 +370,32 @@ function handleHookEvent(payload) {
       }
       break;
     case 'Stop':
-      rec.status = 'done';
-      rec.doneAt = Date.now();
-      if (!rec.notifiedDone) {
-        rec.notifiedDone = true;
-        pendingToast = { suffix: 'finished', message: payload.last_assistant_message || 'Session complete.' };
+      if (payload.last_assistant_message) rec.lastAssistantMessage = payload.last_assistant_message;
+      // The foreground turn ended, but if a background subagent/workflow/shell
+      // this session kicked off is still running, don't call it "done" yet --
+      // it'll otherwise show as falsely finished while work continues.
+      if ((rec.pendingBackground || []).length > 0) {
+        rec.status = 'background';
+      } else {
+        rec.status = 'done';
+        rec.doneAt = Date.now();
+        if (!rec.notifiedDone) {
+          rec.notifiedDone = true;
+          pendingToast = { suffix: 'finished', message: rec.lastAssistantMessage || 'Session complete.' };
+        }
+      }
+      break;
+    case 'SubagentStop':
+      // A background subagent finishing is the only further signal we get
+      // after the foreground turn already stopped -- if that was the last
+      // one pending, the session is now actually done.
+      if (rec.status === 'background' && (rec.pendingBackground || []).length === 0) {
+        rec.status = 'done';
+        rec.doneAt = Date.now();
+        if (!rec.notifiedDone) {
+          rec.notifiedDone = true;
+          pendingToast = { suffix: 'finished', message: rec.lastAssistantMessage || 'Session complete.' };
+        }
       }
       break;
     case 'SessionEnd':
@@ -468,11 +499,18 @@ app.whenReady().then(() => {
   createWindow();
   startServer();
 
-  // Sweep stale "working" sessions to "idle" if nothing happened for 10+ minutes
+  // Sweep stale "working" sessions to "idle" if nothing happened for 30+ minutes
   // and no Stop event ever arrived (e.g. Claude Code was closed uncleanly).
   // Also drop sessions once they fall outside the active window, and unstick
   // any session that's been in "needs_action" for over an hour (a dropped
   // hook or crashed session, not a real pending question).
+  //
+  // lastEventAt only advances on UserPromptSubmit/Notification/Stop/SessionEnd
+  // and on PreToolUse/PostToolUse for AskUserQuestion|ExitPlanMode -- ordinary
+  // tool calls aren't hooked (see "Only hook what you need" above), so a turn
+  // that's heads-down on tool calls for a while won't touch lastEventAt at
+  // all. Keep this threshold well above normal turn length or it'll flag
+  // genuinely active sessions as idle.
   setInterval(() => {
     const now = Date.now();
     let changed = false;
@@ -482,12 +520,21 @@ app.whenReady().then(() => {
         changed = true;
         continue;
       }
-      if (rec.status === 'working' && now - rec.lastEventAt > 10 * 60 * 1000) {
+      if (rec.status === 'working' && now - rec.lastEventAt > 30 * 60 * 1000) {
         rec.status = 'idle';
         changed = true;
       }
       if (rec.status === 'needs_action' && now - rec.lastEventAt > 60 * 60 * 1000) {
         rec.status = 'idle';
+        changed = true;
+      }
+      // A pending "background" workflow/shell task (unlike a subagent) has no
+      // stop hook of its own to tell us when it finishes, so nothing may ever
+      // clear this card otherwise -- fall back to "done" after an hour rather
+      // than showing "Background" indefinitely.
+      if (rec.status === 'background' && now - rec.lastEventAt > 60 * 60 * 1000) {
+        rec.status = 'done';
+        rec.doneAt = rec.doneAt || now;
         changed = true;
       }
     }
@@ -576,6 +623,7 @@ to reskin it with a different palette or logo.
     --success: #4B8A63;
     --danger: #B4472F;
     --info: #4A6FA5;
+    --pending: #7C6BA8;
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
@@ -660,6 +708,7 @@ to reskin it with a different palette or logo.
   .card.status-needs_action { border-left-color: var(--danger); background: #2e2029; animation: pulse 1.6s ease-in-out infinite; }
   .card.status-done { border-left-color: var(--success); }
   .card.status-idle { border-left-color: var(--info); }
+  .card.status-background { border-left-color: var(--pending); }
 
   @keyframes pulse {
     0%, 100% { box-shadow: 0 0 0 rgba(180,71,47,0); }
@@ -695,6 +744,7 @@ to reskin it with a different palette or logo.
   .status-needs_action .badge { background: var(--danger); color: var(--cream); }
   .status-done .badge { background: var(--success); color: var(--cream); }
   .status-idle .badge { background: var(--info); color: var(--cream); }
+  .status-background .badge { background: var(--pending); color: var(--cream); }
 
   .dismissBtn {
     -webkit-app-region: no-drag;
@@ -720,6 +770,7 @@ to reskin it with a different palette or logo.
   .status-done .bar { width: 100%; background: var(--success); animation: none; }
   .status-needs_action .bar { width: 100%; background: var(--danger); animation: none; }
   .status-idle .bar { width: 45%; background: var(--info); animation: none; }
+  .status-background .bar { background: var(--pending); animation: indet 1.9s ease-in-out infinite; }
 
   @keyframes indet {
     0% { margin-left: -30%; width: 30%; }
@@ -755,6 +806,7 @@ const STATUS_LABEL = {
   working: 'Working',
   idle: 'Idle',
   needs_action: 'Needs You',
+  background: 'Background',
   done: 'Done'
 };
 
@@ -780,7 +832,7 @@ function render(sessions) {
   }
   emptyEl.style.display = 'none';
 
-  const order = { needs_action: 0, working: 1, idle: 2, done: 3 };
+  const order = { needs_action: 0, working: 1, background: 2, idle: 3, done: 4 };
   const sorted = [...sessions].sort((a, b) => {
     const d = order[a.status] - order[b.status];
     if (d !== 0) return d;
@@ -1014,12 +1066,33 @@ doing it**, the same way you would before any other edit to shared config.
     "Stop": [
       { "matcher": "*", "hooks": [ { "type": "http", "url": "http://127.0.0.1:51823/hook", "timeout": 2 } ] }
     ],
+    "SubagentStart": [
+      { "matcher": "*", "hooks": [ { "type": "http", "url": "http://127.0.0.1:51823/hook", "timeout": 2 } ] }
+    ],
+    "SubagentStop": [
+      { "matcher": "*", "hooks": [ { "type": "http", "url": "http://127.0.0.1:51823/hook", "timeout": 2 } ] }
+    ],
+    "TaskCreated": [
+      { "matcher": "*", "hooks": [ { "type": "http", "url": "http://127.0.0.1:51823/hook", "timeout": 2 } ] }
+    ],
+    "TaskCompleted": [
+      { "matcher": "*", "hooks": [ { "type": "http", "url": "http://127.0.0.1:51823/hook", "timeout": 2 } ] }
+    ],
     "SessionEnd": [
       { "matcher": "*", "hooks": [ { "type": "http", "url": "http://127.0.0.1:51823/hook", "timeout": 2 } ] }
     ]
   }
 }
 ```
+
+`SubagentStop`'s payload carries a `background_tasks` snapshot (every subagent/
+background-shell/workflow still running for that session) plus `agent_id` for
+the subagent that just stopped — see `pendingBackground` handling in Step 3's
+`handleHookEvent`. `SubagentStart`/`TaskCreated`/`TaskCompleted` don't drive
+any state transition themselves; they're wired up so their events still touch
+`lastEventAt`, which matters for the idle-sweep note above (a turn that
+dispatches a subagent partway through gets its clock refreshed instead of
+drifting toward a false "idle").
 
 If the port in `main.js` (`PORT = 51823`) gets changed, update every URL
 above to match. If this is a second install alongside an existing one on the
@@ -1095,6 +1168,18 @@ clear it in the current shell before running on Windows.
   on launch with no visible error. If you're doing a second/test install
   alongside an existing one, change `package.json`'s `"name"` field as well
   as the port -- not just the port.
+- **`Stop` firing doesn't mean the session is actually done.** If the turn
+  dispatched a background subagent/workflow/shell task, Claude Code's main
+  `Stop` hook fires the instant the *foreground* turn ends -- while that
+  background work keeps running and is only reported back into the
+  conversation later, invisibly to the hook system. Confirmed by capturing
+  real `SubagentStop` payloads: they carry a `background_tasks` array (a live
+  snapshot of every subagent/shell/workflow still running for that session).
+  Track it as `pendingBackground` and hold the card at a `background` status
+  --  distinct from `done` -- until it drains to empty (via a later
+  `SubagentStop`) or a safety-net timeout gives up waiting. Don't skip this if
+  you expect the widget's user to run background agents/workflows; without it
+  a session doing real work reads as finished.
 
 ## Customization
 
